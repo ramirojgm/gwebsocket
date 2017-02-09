@@ -22,7 +22,7 @@ struct _HttpPackageClass
 G_BEGIN_DECLS
 
 GDataInputStream
-*			http_data_input_stream(GInputStream * stream,gsize * length,GCancellable * cancellable,GError ** error);
+*		http_data_input_stream(GInputStream * stream,gsize * length,GCancellable * cancellable,GError ** error);
 
 gboolean	http_package_read_from_stream(HttpPackage * package,GDataInputStream * stream,gsize * length,GCancellable * cancellable,GError ** error);
 gboolean	http_package_write_to_stream(HttpPackage * package,GOutputStream * stream,gsize * length,GCancellable * cancellable,GError ** error);

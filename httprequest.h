@@ -36,13 +36,13 @@ G_BEGIN_DECLS
 HttpRequest *		http_request_new(HttpRequestMethod method,const gchar * query,gdouble version);
 
 HttpRequestMethod	http_request_get_method(HttpRequest * request);
-void			    http_request_set_method(HttpRequest * request,HttpRequestMethod method);
+void			http_request_set_method(HttpRequest * request,HttpRequestMethod method);
 
 const gchar *		http_request_get_query(HttpRequest * request);
-void			    http_request_set_query(HttpRequest * request,const gchar * query);
+void			http_request_set_query(HttpRequest * request,const gchar * query);
 
-gdouble			    http_request_get_version(HttpRequest * request);
-void			    http_request_set_version(HttpRequest * request,gdouble version);
+gdouble			http_request_get_version(HttpRequest * request);
+void			http_request_set_version(HttpRequest * request,gdouble version);
 
 G_END_DECLS
 

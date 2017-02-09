@@ -10,7 +10,7 @@ typedef struct _HttpPackagePrivate	HttpPackagePrivate;
 struct _HttpPackageAttribute
 {
 	gchar	* name,
-			* value;
+		* value;
 	gsize	length;
 };
 
