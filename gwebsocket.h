@@ -38,12 +38,14 @@ struct _GWebSocketClass
   GObjectClass 	parent_class;
 
   /*<override>*/
-  gboolean 	(*send)(GWebSocket * socket,GWebSocketMessage * message,GError ** error);
+  gboolean 	(*send)(GWebSocket * socket,GWebSocketMessage * message,GCancellable * cancellable,GError ** error);
 
   /*<signal>*/
   void		(*message)(GWebSocket * socket,GWebSocketMessage * message);
   void		(*closed)(GWebSocket * socket);
 };
+
+gboolean	g_websocket_uri_parse(const gchar * uri,gchar ** scheme,gchar ** hostname,gchar ** query);
 
 GType		g_websocket_get_type(void);
 
@@ -55,9 +57,6 @@ gchar *		g_websocket_generate_key();
 
 GWebSocket *	g_websocket_new();
 
-GWebSocket *	g_websocket_factory_create_websocket(
-		    GSocketConnection * connection
-		    );
 
 gboolean	g_websocket_is_connected(
 		    GWebSocket * socket
@@ -65,7 +64,7 @@ gboolean	g_websocket_is_connected(
 
 gboolean	g_websocket_connect(
 		    GWebSocket * socket,
-		    const gchar * host_and_port,
+		    const gchar * uri,
 		    guint16 default_port,
 		    GCancellable * cancellable,
 		    GError ** error);
@@ -87,7 +86,7 @@ gboolean	g_websocket_send_text(
 
 gboolean	g_websocket_send_data(
 		    GWebSocket * socket,
-		    const gchar * text,
+		    const guint8 * data,
 		    gssize length,
 		    GCancellable * cancellable,
 		    GError ** error

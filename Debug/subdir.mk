@@ -6,6 +6,7 @@
 C_SRCS += \
 ../gwebsocket.c \
 ../gwebsocketmessage.c \
+../gwebsocketservice.c \
 ../httppackage.c \
 ../httprequest.c \
 ../httpresponse.c 
@@ -13,6 +14,7 @@ C_SRCS += \
 OBJS += \
 ./gwebsocket.o \
 ./gwebsocketmessage.o \
+./gwebsocketservice.o \
 ./httppackage.o \
 ./httprequest.o \
 ./httpresponse.o 
@@ -20,6 +22,7 @@ OBJS += \
 C_DEPS += \
 ./gwebsocket.d \
 ./gwebsocketmessage.d \
+./gwebsocketservice.d \
 ./httppackage.d \
 ./httprequest.d \
 ./httpresponse.d 
@@ -29,7 +32,7 @@ C_DEPS += \
 %.o: ../%.c
 	@echo 'Building file: $<'
 	@echo 'Invoking: Cross GCC Compiler'
-	gcc -std=c11 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -O3 -g3 -Wall -c -fmessage-length=0 -pthread -fPIC -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -o "$@" "$<"
+	gcc -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -O0 -g3 -Wall -c -fmessage-length=0 -fPIC -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
