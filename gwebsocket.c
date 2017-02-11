@@ -40,6 +40,7 @@ typedef enum
 struct _GWebSocketPrivate
 {
   GSocketConnection *	connection;
+  HttpRequest *		request;
   GMutex 		mutex_input;
   GMutex 		mutex_output;
   GThread *		recv_thread;
@@ -133,9 +134,6 @@ g_websocket_class_init(GWebSocketClass * klass)
   G_OBJECT_CLASS(klass)->dispose = _g_websocket_dispose;
   /*<override>*/
   klass->send = _g_websocket_send;
-  /*<signal>*/
-  klass->closed = NULL;
-  klass->message = NULL;
 
   const GType message_params[1] = {G_TYPE_POINTER};
 
@@ -143,7 +141,7 @@ g_websocket_class_init(GWebSocketClass * klass)
       g_signal_newv ("message",
        G_TYPE_FROM_CLASS (klass),
        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
-       G_STRUCT_OFFSET(GWebSocketClass,message) /* closure */,
+       NULL /* closure */,
        NULL /* accumulator */,
        NULL /* accumulator data */,
        NULL /* C marshaller */,
@@ -155,7 +153,7 @@ g_websocket_class_init(GWebSocketClass * klass)
       g_signal_newv ("closed",
        G_TYPE_FROM_CLASS (klass),
        G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
-       G_STRUCT_OFFSET(GWebSocketClass,closed) /* closure */,
+       NULL /* closure */,
        NULL /* accumulator */,
        NULL /* accumulator data */,
        NULL /* C marshaller */,
@@ -174,6 +172,7 @@ _g_websocket_dispose(GObject* object)
     g_websocket_close(self,NULL);
   g_mutex_clear(&priv->mutex_input);
   g_mutex_clear(&priv->mutex_output);
+  g_clear_object(&(priv->request));
 }
 
 gchar *
@@ -254,6 +253,7 @@ _g_websocket_stop(GWebSocket * self)
   if(g_socket_connection_is_connected(priv->connection))
     g_io_stream_close(G_IO_STREAM(priv->connection),NULL,NULL);
 
+  g_signal_emit(self,g_websocket_signals[SIGNAL_CLOSED],0);
   g_clear_object(&(priv->connection));
   g_clear_object(&(priv->recv_cancellable));
 }
@@ -321,7 +321,7 @@ _g_websocket_recv_idle(
   case G_WEBSOCKET_CODEOP_BINARY:
     {
       GWebSocketMessage * message = g_websocket_message_new_data(data->datagram->buffer,data->datagram->count);
-       g_signal_emit (data->socket, g_websocket_signals[SIGNAL_MESSAGE],0);
+       g_signal_emit (data->socket, g_websocket_signals[SIGNAL_MESSAGE],0,message);
        g_websocket_message_free(message);
     }
     break;
@@ -368,12 +368,12 @@ _g_websocket_send(
       if(g_websocket_message_get_type(message) == G_WEBSOCKET_MESSAGE_TEXT)
 	{
 	  msg->code = G_WEBSOCKET_CODEOP_TEXT;
-	  msg->buffer = (guint8*)g_websocket_message_get_data(message);
+	  msg->buffer = (guint8*)g_websocket_message_get_text(message);
 	}
       else
 	{
 	  msg->code = G_WEBSOCKET_CODEOP_BINARY;
-	  msg->buffer = (guint8*)g_websocket_message_get_text(message);
+	  msg->buffer = (guint8*)g_websocket_message_get_data(message);
 	}
       msg->count = g_websocket_message_get_length(message);
 
@@ -391,6 +391,27 @@ _g_websocket_send(
       //TODO: is not connected
       return FALSE;
     }
+}
+
+gboolean
+_g_websocket_ping(GWebSocket * socket)
+{
+  GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
+  gboolean done = FALSE;
+  GOutputStream * output = NULL;
+  if(g_socket_connection_is_connected(G_IO_STREAM(priv->connection)))
+    {
+      output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
+      GWebSocketDatagram * ping = g_new0(GWebSocketDatagram,1);
+      ping->code = G_WEBSOCKET_CODEOP_PING;
+      ping->buffer = (guint8*)"ARE YOU CONNECTED";
+      ping->count = 17;
+      ping->fin = TRUE;
+      ping->mask = 0;
+      done = _g_websocket_write(output,ping,NULL,NULL);
+      g_free(ping);
+    }
+  return done;
 }
 
 static gboolean
@@ -452,12 +473,13 @@ _g_websocket_read(
 		  for(guint i = 0;i<result->count;i++)
 		    (result->buffer)[i] ^= mask[i % 4];
 		}
+	      *datagram = result;
 	    }
 	  else if(result->code == G_WEBSOCKET_CODEOP_BINARY || result->code == G_WEBSOCKET_CODEOP_TEXT)
 	    {
 		//TODO: bad size datagram and free it
 	      done = FALSE;
-
+	      *datagram = NULL;
 	    }
 	  else
 	    {
@@ -519,14 +541,17 @@ _g_websocket_write(
 
   gboolean done = FALSE;
   done = g_output_stream_write_all (output, header, p, NULL, cancellable,error);
-  if(!(datagram->mask))
+  if(datagram->buffer)
     {
-      done = done && g_output_stream_write_all (output, datagram->buffer, datagram->count, NULL, cancellable, error);
-    }
-  else
-    {
-      done = done && g_output_stream_write_all (output, masked_buf, datagram->count, NULL, cancellable, error);
-      g_free(masked_buf);
+      if(!(datagram->mask))
+	{
+	  done = done && g_output_stream_write_all (output, datagram->buffer, datagram->count, NULL, cancellable, error);
+	}
+      else
+	{
+	  done = done && g_output_stream_write_all (output, masked_buf, datagram->count, NULL, cancellable, error);
+	  g_free(masked_buf);
+	}
     }
   return done;
 }
@@ -536,7 +561,7 @@ _g_websocket_complete(GWebSocket * socket,GSocketConnection * connection)
 {
   gboolean done = FALSE;
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
-  priv->connection = connection;
+  priv->connection = G_SOCKET_CONNECTION(g_object_ref(connection));
   GInputStream * input = g_io_stream_get_input_stream(G_IO_STREAM(priv->connection));
   GOutputStream * output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
   g_socket_set_keepalive(g_socket_connection_get_socket(priv->connection),TRUE);
@@ -562,6 +587,8 @@ _g_websocket_complete(GWebSocket * socket,GSocketConnection * connection)
 	  http_package_set_string(HTTP_PACKAGE(response),"Sec-WebSocket-Origin",origin,-1);
 	  http_package_write_to_stream(HTTP_PACKAGE(response),output,NULL,NULL,NULL);
 	  g_free(handshake);
+	  priv->request = HTTP_REQUEST(g_object_ref(request));
+	  _g_websocket_start(socket);
 	  done = TRUE;
 	}
       else
@@ -616,6 +643,7 @@ _g_websocket_complete_client(GWebSocket * socket,const gchar * hostname,const gc
 	g_object_unref(data_stream);
 	if((http_response_get_code(response) == HTTP_RESPONSE_SWITCHING_PROTOCOLS) && (g_strcmp0(handshake,http_package_get_string(HTTP_PACKAGE(response),"Sec-WebSocket-Accept",NULL)) == 0))
 	  {
+	    priv->request = HTTP_REQUEST(g_object_ref(request));
 	    _g_websocket_start(socket);
 	    done = TRUE;
 	  }
@@ -690,6 +718,14 @@ g_websocket_connect(
   g_free(query);
   g_object_unref(client);
   return done;
+}
+
+HttpRequest *
+g_websocket_get_request(
+    GWebSocket * socket)
+{
+  GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
+  return priv->request;
 }
 
 gboolean

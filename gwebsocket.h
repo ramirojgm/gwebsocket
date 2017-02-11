@@ -39,10 +39,6 @@ struct _GWebSocketClass
 
   /*<override>*/
   gboolean 	(*send)(GWebSocket * socket,GWebSocketMessage * message,GCancellable * cancellable,GError ** error);
-
-  /*<signal>*/
-  void		(*message)(GWebSocket * socket,GWebSocketMessage * message);
-  void		(*closed)(GWebSocket * socket);
 };
 
 gboolean	g_websocket_uri_parse(const gchar * uri,gchar ** scheme,gchar ** hostname,gchar ** query);
@@ -68,6 +64,9 @@ gboolean	g_websocket_connect(
 		    guint16 default_port,
 		    GCancellable * cancellable,
 		    GError ** error);
+
+HttpRequest *	g_websocket_get_request(
+		    GWebSocket * socket);
 
 gboolean	g_websocket_send(
 		    GWebSocket * socket,

@@ -29,11 +29,6 @@ typedef void (*GWebSocketBroadCastFunc)(GWebSocketService * service,GWebSocket *
 struct _GWebSocketServiceClass
 {
   GThreadedSocketServiceClass parent_class;
-
-  /*<signals>*/
-  void	(*connected)(GWebSocketService * service,GWebSocket * socket,const gchar * request);
-  void	(*message)(GWebSocketService * service,GWebSocket * socket,GWebSocketMessage * msg);
-  void	(*closed)(GWebSocketService * service,GWebSocket * socket);
 };
 
 GType			g_websocket_service_get_type(void);
