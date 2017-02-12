@@ -29,7 +29,12 @@ G_DEFINE_TYPE_WITH_PRIVATE(GWebSocketService,g_websocket_service,G_TYPE_THREADED
 
 void		_g_websocket_service_dispose(GObject * object);
 
-gboolean	_g_websocket_complete(GWebSocket * socket,GSocketConnection * connection);
+gboolean	_g_websocket_complete(
+		    GWebSocket * socket,
+		    GSocketConnection * connection,
+		    HttpRequest *  request,
+		    const gchar *  key,
+		    const gchar *  origin);
 
 static gboolean	_g_websocket_service_run (
 		    GThreadedSocketService *service,
@@ -51,6 +56,7 @@ enum
 	SIGNAL_CONNECTED = 0,
 	SIGNAL_MESSAGE = 1,
 	SIGNAL_CLOSED = 2,
+	SIGNAL_REQUEST = 3,
 	N_SIGNALS
 };
 
@@ -72,7 +78,8 @@ g_websocket_service_class_init(GWebSocketServiceClass * klass)
   G_OBJECT_CLASS(klass)->dispose = _g_websocket_service_dispose;
 
   const GType message_params[2] = {G_TYPE_OBJECT,G_TYPE_POINTER};
-  const GType socket_params[2] = {G_TYPE_OBJECT};
+  const GType socket_params[1] = {G_TYPE_OBJECT};
+  const GType request_params[2] = {G_TYPE_OBJECT,G_TYPE_OBJECT};
 
   g_websocket_service_signals[SIGNAL_CONNECTED] =
      g_signal_newv ("connected",
@@ -109,6 +116,18 @@ g_websocket_service_class_init(GWebSocketServiceClass * klass)
       G_TYPE_NONE /* return_type */,
       1     /* n_params */,
       (GType*)socket_params  /* param_types */);
+
+  g_websocket_service_signals[SIGNAL_REQUEST] =
+     g_signal_newv ("request",
+      G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      NULL /* closure */,
+      NULL /* accumulator */,
+      NULL /* accumulator data */,
+      NULL /* C marshaller */,
+      G_TYPE_NONE /* return_type */,
+      2     /* n_params */,
+      (GType*)request_params  /* param_types */);
 }
 
 static gboolean	_g_websocket_service_run (
@@ -117,17 +136,44 @@ static gboolean	_g_websocket_service_run (
 		  GObject                *source_object)
 {
   GWebSocketServicePrivate * priv = g_websocket_service_get_instance_private(G_WEBSOCKET_SERVICE(service));
-  GWebSocket * socket = g_websocket_new();
-  if(_g_websocket_complete(socket,connection))
+  GInputStream * input = g_io_stream_get_input_stream(G_IO_STREAM(connection));
+  HttpRequest * request = http_request_new(HTTP_REQUEST_METHOD_GET,"",1.1);
+  GDataInputStream * data_stream = http_data_input_stream(input,NULL,NULL,NULL);
+
+  if(data_stream)
     {
-      g_mutex_lock(&(priv->mutex_clients));
-      priv->clients = g_list_append(priv->clients,g_object_ref(socket));
-      g_signal_connect(G_OBJECT(socket),"message",G_CALLBACK(_g_websocket_service_client_message),service);
-      g_signal_connect(G_OBJECT(socket),"closed",G_CALLBACK(_g_websocket_service_client_closed),service);
-      g_mutex_unlock(&(priv->mutex_clients));
-      g_signal_emit (G_WEBSOCKET_SERVICE(service), g_websocket_service_signals[SIGNAL_CONNECTED],0,socket);
+      http_package_read_from_stream(HTTP_PACKAGE(request),data_stream,NULL,NULL,NULL);
+      g_object_unref(data_stream);
+      const gchar * key = NULL, *origin = NULL;
+      gboolean  is_websocket = ((g_ascii_strcasecmp(http_package_get_string(HTTP_PACKAGE(request),"Upgrade",NULL),"websocket") == 0))
+			    && (origin = http_package_get_string(HTTP_PACKAGE(request),"Origin",NULL))
+			    && (key = http_package_get_string(HTTP_PACKAGE(request),"Sec-WebSocket-Key",NULL));
+      if(is_websocket)
+	{
+	  GWebSocket * socket = g_websocket_new();
+	   if(_g_websocket_complete(socket,connection,request,key,origin))
+	     {
+	       g_mutex_lock(&(priv->mutex_clients));
+	       priv->clients = g_list_append(priv->clients,g_object_ref(socket));
+	       g_signal_connect(G_OBJECT(socket),"message",G_CALLBACK(_g_websocket_service_client_message),service);
+	       g_signal_connect(G_OBJECT(socket),"closed",G_CALLBACK(_g_websocket_service_client_closed),service);
+	       g_mutex_unlock(&(priv->mutex_clients));
+	       g_signal_emit (G_WEBSOCKET_SERVICE(service), g_websocket_service_signals[SIGNAL_CONNECTED],0,socket);
+	     }
+	   g_object_unref(socket);
+	}
+      else
+      {
+	g_signal_emit(service,g_websocket_service_signals[SIGNAL_REQUEST],0,request,connection);
+	if(g_socket_connection_is_connected(connection))
+	  g_io_stream_close(G_IO_STREAM(connection),NULL,NULL);
+      }
     }
-  g_object_unref(socket);
+  else
+    {
+      g_io_stream_close(G_IO_STREAM(connection),NULL,NULL);
+    }
+  g_object_unref(request);
   return FALSE;
 }
 

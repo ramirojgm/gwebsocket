@@ -300,49 +300,53 @@ _g_websocket_recv_idle(
     )
 {
   GWebSocketIdleData * data = (GWebSocketIdleData*)idle_data;
-  GWebSocketPrivate * priv = g_websocket_get_instance_private(data->socket);
-
-  GOutputStream * output = NULL;
-  if(g_socket_connection_is_connected(G_IO_STREAM(priv->connection)))
-    output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
-
-  switch(data->datagram->code)
-  {
-  case G_WEBSOCKET_CODEOP_CLOSE:
-    g_websocket_close(data->socket,NULL);
-    break;
-  case G_WEBSOCKET_CODEOP_TEXT:
+  if(G_IS_WEBSOCKET(data->socket))
     {
-      GWebSocketMessage * message = g_websocket_message_new_text((const gchar*)data->datagram->buffer,data->datagram->count);
-      g_signal_emit (data->socket, g_websocket_signals[SIGNAL_MESSAGE],0,message);
-      g_websocket_message_free(message);
-    }
-    break;
-  case G_WEBSOCKET_CODEOP_BINARY:
-    {
-      GWebSocketMessage * message = g_websocket_message_new_data(data->datagram->buffer,data->datagram->count);
-       g_signal_emit (data->socket, g_websocket_signals[SIGNAL_MESSAGE],0,message);
-       g_websocket_message_free(message);
-    }
-    break;
-  case G_WEBSOCKET_CODEOP_CONTINUE:
-    break;
-  case G_WEBSOCKET_CODEOP_PING:
-    if(output)
+      GWebSocketPrivate * priv = g_websocket_get_instance_private(data->socket);
+
+      GOutputStream * output = NULL;
+      if(g_socket_connection_is_connected(priv->connection))
+	output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
+
+      switch(data->datagram->code)
       {
-	GWebSocketDatagram * pong = g_new0(GWebSocketDatagram,1);
-	pong->code = G_WEBSOCKET_CODEOP_PONG;
-	pong->count = data->datagram->count;
-	pong->buffer = data->datagram->buffer;
-	pong->fin = TRUE;
-	pong->mask = 0;
-	_g_websocket_write(output,pong,NULL,NULL);
-	g_free(pong);
+      case G_WEBSOCKET_CODEOP_CLOSE:
+	g_websocket_close(data->socket,NULL);
+	break;
+      case G_WEBSOCKET_CODEOP_TEXT:
+	{
+	  GWebSocketMessage * message = g_websocket_message_new_text((const gchar*)data->datagram->buffer,data->datagram->count);
+	  g_signal_emit (data->socket, g_websocket_signals[SIGNAL_MESSAGE],0,message);
+	  g_websocket_message_free(message);
+	}
+	break;
+      case G_WEBSOCKET_CODEOP_BINARY:
+	{
+	  GWebSocketMessage * message = g_websocket_message_new_data(data->datagram->buffer,data->datagram->count);
+	   g_signal_emit (data->socket, g_websocket_signals[SIGNAL_MESSAGE],0,message);
+	   g_websocket_message_free(message);
+	}
+	break;
+      case G_WEBSOCKET_CODEOP_CONTINUE:
+	break;
+      case G_WEBSOCKET_CODEOP_PING:
+	if(output)
+	  {
+	    GWebSocketDatagram * pong = g_new0(GWebSocketDatagram,1);
+	    pong->code = G_WEBSOCKET_CODEOP_PONG;
+	    pong->count = data->datagram->count;
+	    pong->buffer = data->datagram->buffer;
+	    pong->fin = TRUE;
+	    pong->mask = 0;
+	    _g_websocket_write(output,pong,NULL,NULL);
+	    g_free(pong);
+	  }
+	break;
+      default:
+	break;
       }
-    break;
-  default:
-    break;
-  }
+    }
+
   g_free(data->datagram->buffer);
   g_free(data->datagram);
   g_free(data);
@@ -399,7 +403,7 @@ _g_websocket_ping(GWebSocket * socket)
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
   gboolean done = FALSE;
   GOutputStream * output = NULL;
-  if(g_socket_connection_is_connected(G_IO_STREAM(priv->connection)))
+  if(g_socket_connection_is_connected(priv->connection))
     {
       output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
       GWebSocketDatagram * ping = g_new0(GWebSocketDatagram,1);
@@ -557,53 +561,32 @@ _g_websocket_write(
 }
 
 gboolean
-_g_websocket_complete(GWebSocket * socket,GSocketConnection * connection)
+_g_websocket_complete(
+    GWebSocket * socket,
+    GSocketConnection * connection,
+    HttpRequest * request,
+    const gchar * key,
+    const gchar * origin)
 {
   gboolean done = FALSE;
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
   priv->connection = G_SOCKET_CONNECTION(g_object_ref(connection));
-  GInputStream * input = g_io_stream_get_input_stream(G_IO_STREAM(priv->connection));
   GOutputStream * output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
+
   g_socket_set_keepalive(g_socket_connection_get_socket(priv->connection),TRUE);
 
-  HttpRequest * request = http_request_new(HTTP_REQUEST_METHOD_GET,"",1.1);
   HttpResponse* response = http_response_new(HTTP_RESPONSE_SWITCHING_PROTOCOLS,1.1);
-  GDataInputStream * data_stream = http_data_input_stream(input,NULL,NULL,NULL);
 
-  if(data_stream)
-    {
-      http_package_read_from_stream(HTTP_PACKAGE(request),data_stream,NULL,NULL,NULL);
-      g_object_unref(data_stream);
-      const gchar * key = NULL, *origin = NULL;
-      gboolean  is_valid = ((g_ascii_strcasecmp(http_package_get_string(HTTP_PACKAGE(request),"Upgrade",NULL),"websocket") == 0))
-			      && (origin = http_package_get_string(HTTP_PACKAGE(request),"Origin",NULL))
-			      && (key = http_package_get_string(HTTP_PACKAGE(request),"Sec-WebSocket-Key",NULL));
-      if(is_valid)
-	{
-	  gchar *  handshake = g_websocket_generate_handshake(key);
-	  http_package_set_string(HTTP_PACKAGE(response),"Upgrade","websocket",-1);
-	  http_package_set_string(HTTP_PACKAGE(response),"Connection","upgrade",-1);
-	  http_package_set_string(HTTP_PACKAGE(response),"Sec-WebSocket-Accept",handshake,-1);
-	  http_package_set_string(HTTP_PACKAGE(response),"Sec-WebSocket-Origin",origin,-1);
-	  http_package_write_to_stream(HTTP_PACKAGE(response),output,NULL,NULL,NULL);
-	  g_free(handshake);
-	  priv->request = HTTP_REQUEST(g_object_ref(request));
-	  _g_websocket_start(socket);
-	  done = TRUE;
-	}
-      else
-	{
-	  http_response_set_code(response,HTTP_RESPONSE_BAD_REQUEST);
-	  http_package_write_to_stream(HTTP_PACKAGE(response),output,NULL,NULL,NULL);
-	  g_io_stream_close(G_IO_STREAM(priv->connection),NULL,NULL);
-	  g_clear_object(&(priv->connection));
-	}
-    }
-  else
-    {
-      g_io_stream_close(G_IO_STREAM(priv->connection),NULL,NULL);
-      g_clear_object(&(priv->connection));
-    }
+  gchar *  handshake = g_websocket_generate_handshake(key);
+  http_package_set_string(HTTP_PACKAGE(response),"Upgrade","websocket",-1);
+  http_package_set_string(HTTP_PACKAGE(response),"Connection","upgrade",-1);
+  http_package_set_string(HTTP_PACKAGE(response),"Sec-WebSocket-Accept",handshake,-1);
+  http_package_set_string(HTTP_PACKAGE(response),"Sec-WebSocket-Origin",origin,-1);
+  done = http_package_write_to_stream(HTTP_PACKAGE(response),output,NULL,NULL,NULL);
+  g_free(handshake);
+
+  priv->request = HTTP_REQUEST(g_object_ref(request));
+  _g_websocket_start(socket);
 
   g_object_unref(request);
   g_object_unref(response);
