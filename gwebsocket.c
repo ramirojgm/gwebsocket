@@ -24,6 +24,7 @@
 typedef struct _GWebSocketPrivate GWebSocketPrivate;
 typedef struct _GWebSocketDatagram GWebSocketDatagram;
 typedef struct _GWebSocketIdleData GWebSocketIdleData;
+typedef struct _GWebSocketReadData GWebSocketReadData;
 
 #define G_WEBSOCKET_KEY_MAGIC "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -63,17 +64,30 @@ struct _GWebSocketIdleData
   GWebSocketDatagram * datagram;
 };
 
+struct _GWebSocketReadData
+{
+  GWebSocket	*	socket;
+  GInputStream	* 	stream;
+  GCancellable * 	cancellable;
+  gpointer 		data;
+  guint8 		header_buffer[2];
+  gboolean		have_mask;
+  GWebSocketDatagram * 	datagram;
+};
+
 G_DEFINE_TYPE_WITH_PRIVATE(GWebSocket,g_websocket,G_TYPE_OBJECT)
+
+static GMutex	g_websocket_mutex = G_STATIC_MUTEX_INIT;
 
 static void	_g_websocket_dispose(GObject* object);
 static void	_g_websocket_start(GWebSocket * self);
 static void	_g_websocket_stop(GWebSocket * self);
 
-static gboolean	_g_websocket_read(GInputStream * input,GWebSocketDatagram ** datagram,GCancellable * cancellable,GError ** error);
+static gboolean	_g_websocket_read_async(GWebSocket * socket,GCancellable * cancellable,GError ** error);
+
 static gboolean	_g_websocket_write(GOutputStream * output,GWebSocketDatagram * datagram,GCancellable * cancellable,GError ** error);
 
 static gboolean _g_websocket_recv_idle(gpointer idle_data);
-static gpointer	_g_websocket_recv_thread(gpointer thread_data);
 
 static gboolean _g_websocket_send(GWebSocket * socket,GWebSocketMessage * message,GCancellable * cancellable,GError ** error);
 
@@ -140,7 +154,7 @@ g_websocket_class_init(GWebSocketClass * klass)
   g_websocket_signals[SIGNAL_MESSAGE] =
       g_signal_newv ("message",
        G_TYPE_FROM_CLASS (klass),
-       G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+       G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
        NULL /* closure */,
        NULL /* accumulator */,
        NULL /* accumulator data */,
@@ -152,7 +166,7 @@ g_websocket_class_init(GWebSocketClass * klass)
   g_websocket_signals[SIGNAL_CLOSED] =
       g_signal_newv ("closed",
        G_TYPE_FROM_CLASS (klass),
-       G_SIGNAL_RUN_LAST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+       G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
        NULL /* closure */,
        NULL /* accumulator */,
        NULL /* accumulator data */,
@@ -166,13 +180,28 @@ g_websocket_class_init(GWebSocketClass * klass)
 static void
 _g_websocket_dispose(GObject* object)
 {
+  g_mutex_lock(&g_websocket_mutex);
   GWebSocket * self = G_WEBSOCKET(object);
   GWebSocketPrivate * priv = g_websocket_get_instance_private(self);
+  g_mutex_unlock(&g_websocket_mutex);
   if(g_websocket_is_connected(self))
-    g_websocket_close(self,NULL);
+    {
+      GWebSocketDatagram * datagram = g_new0(GWebSocketDatagram,1);
+      datagram->code = G_WEBSOCKET_CODEOP_CLOSE;
+      datagram->buffer = NULL;
+      datagram->count = 0;
+      datagram->fin = TRUE;
+      datagram->mask = 0;
+      _g_websocket_write(g_io_stream_get_output_stream(G_IO_STREAM(priv->connection)),datagram,NULL,NULL);
+      g_free(datagram);
+      _g_websocket_stop(self);
+    }
+  g_mutex_lock(&g_websocket_mutex);
   g_mutex_clear(&priv->mutex_input);
   g_mutex_clear(&priv->mutex_output);
   g_clear_object(&(priv->request));
+  g_mutex_unlock(&g_websocket_mutex);
+  G_OBJECT_CLASS(g_websocket_parent_class)->dispose(object);
 }
 
 gchar *
@@ -234,7 +263,7 @@ _g_websocket_start(GWebSocket * self)
   g_return_if_fail(priv->connection != NULL);
   g_return_if_fail(g_socket_connection_is_connected(priv->connection) == TRUE);
   priv->recv_cancellable = g_cancellable_new();
-  priv->recv_thread = g_thread_new("g_websocket_recv_thread",_g_websocket_recv_thread,self);
+  _g_websocket_read_async(self,priv->recv_cancellable,NULL);
 }
 
 void
@@ -242,56 +271,14 @@ _g_websocket_stop(GWebSocket * self)
 {
   GWebSocketPrivate * priv = g_websocket_get_instance_private(self);
   g_return_if_fail(priv->connection != NULL);
-  g_return_if_fail(priv->recv_thread != NULL);
   g_return_if_fail(priv->recv_cancellable != NULL);
-  g_return_if_fail(g_socket_connection_is_connected(priv->connection) == TRUE);
   g_return_if_fail(g_cancellable_is_cancelled(priv->recv_cancellable) == FALSE);
-
   g_cancellable_cancel(priv->recv_cancellable);
-  g_thread_join(priv->recv_thread);
-
   if(g_socket_connection_is_connected(priv->connection))
     g_io_stream_close(G_IO_STREAM(priv->connection),NULL,NULL);
-
   g_signal_emit(self,g_websocket_signals[SIGNAL_CLOSED],0);
   g_clear_object(&(priv->connection));
   g_clear_object(&(priv->recv_cancellable));
-}
-
-static gpointer
-_g_websocket_recv_thread(
-    gpointer thread_data
-    )
-{
-  GWebSocket * socket = G_WEBSOCKET(thread_data);
-  GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
-
-  GMutex * mutex_input = &(priv->mutex_input);
-  GCancellable * cancellable = priv->recv_cancellable;
-  GInputStream * stream = g_io_stream_get_input_stream(G_IO_STREAM(priv->connection));
-  GWebSocketDatagram * datagram = NULL;
-
-  while(_g_websocket_read(stream,&datagram,cancellable,NULL))
-    {
-      g_mutex_lock(mutex_input);
-      if(!g_cancellable_is_cancelled(cancellable) && !g_input_stream_is_closed(stream))
-	{
-	  GWebSocketIdleData * data = g_new0(GWebSocketIdleData,1);
-	  data->datagram = datagram;
-	  data->socket = socket;
-	  g_idle_add(_g_websocket_recv_idle,data);
-	}
-      else
-	{
-	  if(datagram)
-	    {
-	      g_free(datagram->buffer);
-	      g_free(datagram);
-	    }
-	}
-      g_mutex_unlock(mutex_input);
-    }
-  return NULL;
 }
 
 static gboolean
@@ -303,7 +290,6 @@ _g_websocket_recv_idle(
   if(G_IS_WEBSOCKET(data->socket))
     {
       GWebSocketPrivate * priv = g_websocket_get_instance_private(data->socket);
-
       GOutputStream * output = NULL;
       if(g_socket_connection_is_connected(priv->connection))
 	output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
@@ -345,8 +331,9 @@ _g_websocket_recv_idle(
       default:
 	break;
       }
+      if(g_websocket_is_connected(data->socket))
+	_g_websocket_read_async(data->socket,priv->recv_cancellable,NULL);
     }
-
   g_free(data->datagram->buffer);
   g_free(data->datagram);
   g_free(data);
@@ -418,7 +405,144 @@ _g_websocket_ping(GWebSocket * socket)
   return done;
 }
 
+
+static void
+_g_websocket_read_content(GObject *source_object,
+                        GAsyncResult *res,
+                        gpointer user_data)
+{
+  GWebSocketReadData *  data = (GWebSocketReadData *)(user_data);
+  gsize read = 0;
+  if(g_input_stream_read_all_finish(data->stream,res,&read,NULL))
+   {
+      GWebSocketDatagram * datagram = data->datagram;
+      guint8 * mask = (guint8*)&(datagram->mask);
+      if(data->have_mask)
+	{
+	  for(guint i = 0;i<datagram->count;i++)
+	    (datagram->buffer)[i] ^= mask[i % 4];
+	}
+      GWebSocketIdleData * idle_data = g_new0(GWebSocketIdleData,1);
+      idle_data->datagram = data->datagram;
+      idle_data->socket = data->socket;
+      g_idle_add(_g_websocket_recv_idle,idle_data);
+   }
+  else
+   {
+     _g_websocket_stop(data->socket);
+     g_free(data->datagram->buffer);
+     g_free(data->datagram);
+   }
+  g_free(data);
+}
+
+static void
+_g_websocket_read_header(GObject *source_object,
+                        GAsyncResult *res,
+                        gpointer user_data)
+{
+  const guint64 max_frame_size = 15728640L; //-> 15MB
+  gboolean done = FALSE;
+  GWebSocketReadData *  data = (GWebSocketReadData *)(user_data);
+  if(g_input_stream_read_all_finish(data->stream,res,NULL,NULL))
+    {
+      data->datagram = g_new0(GWebSocketDatagram,1);
+      data->datagram->fin = data->header_buffer[0] & 0b10000000;
+      data->datagram->code = data->header_buffer[0] & 0b00001111;
+
+      gboolean have_mask = data->header_buffer[1] & 0b10000000;
+      guint8 header_size = data->header_buffer[1] & 0b01111111;
+
+      if(header_size < 126)
+	{
+	  done = TRUE;
+	  data->datagram->count = header_size;
+	}
+      else if(header_size == 126)
+	{
+	  done = g_input_stream_read_all(data->stream,&(data->datagram->count),2,NULL,data->cancellable,NULL);
+	  data->datagram->count = GUINT16_FROM_BE((guint16)(data->datagram->count));
+	}
+      else if(header_size == 127)
+	{
+	  done = g_input_stream_read_all(data->stream,&(data->datagram->count),8,NULL,data->cancellable,NULL);
+	  data->datagram->count = GUINT64_FROM_BE((guint64)(data->datagram->count));
+	}
+      if(done)
+     	{
+     	  if((data->datagram->count > 0) && (data->datagram->count <= max_frame_size))
+     	    {
+     	      guint8 mask[4] = {0,};
+     	      data->have_mask = have_mask;
+     	      if(have_mask)
+     		{
+     		  done = g_input_stream_read_all(data->stream,mask,4,NULL,data->cancellable,NULL);
+     		  data->datagram->mask = *((guint32 *)(mask));
+     		}
+     	      data->datagram->buffer = g_new0(guint8,(data->datagram->count) + 1);
+     	      g_input_stream_read_all_async(data->stream,
+					    data->datagram->buffer,
+					    data->datagram->count,
+					    G_THREAD_PRIORITY_NORMAL,
+					    data->cancellable,
+					    _g_websocket_read_content,
+					    data);
+     	    }
+     	  else if(data->datagram->count == 0)
+     	    {
+     	      GWebSocketIdleData * idle_data = g_new0(GWebSocketIdleData,1);
+	      idle_data->datagram = data->datagram;
+	      idle_data->socket = data->socket;
+	      g_idle_add(_g_websocket_recv_idle,idle_data);
+	      g_free(data);
+     	    }
+     	  else
+     	    {
+     	      _g_websocket_stop(data->socket);
+     	      g_free(data->datagram);
+     	      g_free(data);
+     	    }
+     	}
+      else
+	{
+	  _g_websocket_stop(data->socket);
+	  g_free(data->datagram);
+	  g_free(data);
+	}
+    }
+  else
+    {
+      _g_websocket_stop(data->socket);
+      g_free(data->datagram);
+      g_free(data);
+    }
+}
+
 static gboolean
+_g_websocket_read_async(
+    GWebSocket * socket,
+    GCancellable * cancellable,
+    GError ** error
+    )
+{
+  GWebSocketReadData * read_data = g_new0(GWebSocketReadData,1);
+  GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
+  GInputStream * stream = g_io_stream_get_input_stream(G_IO_STREAM(priv->connection));
+  read_data->socket = socket;
+  read_data->stream = stream;
+  read_data->cancellable = cancellable;
+  g_input_stream_read_all_async(
+			      stream,
+			      &(read_data->header_buffer),
+			      2,
+			      G_THREAD_PRIORITY_NORMAL,
+			      cancellable,
+			      _g_websocket_read_header,
+			      read_data);
+  return TRUE;
+}
+
+/*static gboolean
 _g_websocket_read(
       GInputStream * input,
       GWebSocketDatagram ** datagram,
@@ -496,7 +620,7 @@ _g_websocket_read(
 	}
     }
   return done;
-}
+}*/
 
 static gboolean
 _g_websocket_write(
@@ -588,7 +712,6 @@ _g_websocket_complete(
   priv->request = HTTP_REQUEST(g_object_ref(request));
   _g_websocket_start(socket);
 
-  g_object_unref(request);
   g_object_unref(response);
   return done;
 }
@@ -667,15 +790,15 @@ g_websocket_is_connected(
     GWebSocket * socket
     )
 {
+  g_mutex_lock(&g_websocket_mutex);
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
+  gboolean result = FALSE;
   if(priv->connection)
     {
-      return g_socket_connection_is_connected(priv->connection);
+      result = g_socket_connection_is_connected(priv->connection);
     }
-  else
-    {
-      return FALSE;
-    }
+  g_mutex_unlock(&g_websocket_mutex);
+  return result;
 }
 
 gboolean
@@ -707,7 +830,9 @@ HttpRequest *
 g_websocket_get_request(
     GWebSocket * socket)
 {
+  g_mutex_lock(&g_websocket_mutex);
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
+  g_mutex_unlock(&g_websocket_mutex);
   return priv->request;
 }
 
