@@ -1,0 +1,25 @@
+<html>
+	<head>
+		<style type="text/css">
+			* 
+			{
+				margin:0;
+			}
+
+		</style>
+	</head>
+	<body>
+		<img id="screenshot" style="max-width:100%;max-height:100%"/>
+		<script type="text/javascript">
+			var screenshot = document.getElementById("screenshot");
+			var urlCreator = window.URL || window.webkitURL;
+			var ws = new WebSocket("ws://localhost:8080/");
+			
+			ws.onmessage = function(data)
+			{
+			   var imageUrl = urlCreator.createObjectURL(data.data);
+				screenshot.src = imageUrl;
+			}	
+		</script>
+	</body>
+</html>
