@@ -13,7 +13,7 @@
 		<script type="text/javascript">
 			var screenshot = document.getElementById("screenshot");
 			var urlCreator = window.URL || window.webkitURL;
-			var ws = new WebSocket("ws://localhost:8080/");
+			var ws = new WebSocket("ws://" + window.location.host + "/");
 			
 			ws.onmessage = function(data)
 			{

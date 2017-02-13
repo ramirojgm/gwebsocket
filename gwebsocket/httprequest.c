@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <math.h>
 #include "httprequest.h"
 
 const gchar * _http_string_method[] = {"GET","POST","HEAD","PUT","DELETE","TRACE","OPTIONS","CONNECT","PATCH",NULL};
@@ -66,7 +67,9 @@ _http_request_read_from_stream_real(HttpPackage * package,
 			}
 		}
 		priv->query = g_strdup(query);
-		priv->version = g_strtod(version + 5,NULL);
+		gint version_first = 1,version_last = 0;
+		sscanf(version + 5,"%d.%d",&version_first,&version_last);
+		priv->version =	((gdouble)version_first) + (((gdouble)version_last) / (log(version_last) * 10));
 		done = HTTP_PACKAGE_CLASS(http_request_parent_class)->read_from_stream(package,data_stream,&count,cancellable,error);
 		total_count += count;
 		if(length)
@@ -97,7 +100,9 @@ _http_request_write_to_stream_real(HttpPackage * package,
 	count = 0,total_count = 0;
 	gboolean
 	done = TRUE;
-	if(g_output_stream_printf(stream,&count,cancellable,error,"%s %s HTTP/%0.1f\r\n",_http_string_method[priv->method],priv->query,priv->version))
+	gdouble version_first = 0;
+	gdouble version_last = modf(priv->version,&version_first);
+	if(g_output_stream_printf(stream,&count,cancellable,error,"%s %s HTTP/%g.%g\r\n",_http_string_method[priv->method],priv->query,version_first,version_last * 10))
 	{
 		done = HTTP_PACKAGE_CLASS(http_request_parent_class)->write_to_stream(package,stream,&total_count,cancellable,error);
 		if(length)

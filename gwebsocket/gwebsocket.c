@@ -42,9 +42,6 @@ struct _GWebSocketPrivate
 {
   GSocketConnection *	connection;
   HttpRequest *		request;
-  GMutex 		mutex_input;
-  GMutex 		mutex_output;
-  GThread *		recv_thread;
   GCancellable *  	recv_cancellable;
   gboolean		use_mask;
 };
@@ -137,8 +134,6 @@ static void
 g_websocket_init(GWebSocket * self)
 {
   GWebSocketPrivate * priv = g_websocket_get_instance_private(self);
-  g_mutex_init(&(priv->mutex_input));
-  g_mutex_init(&(priv->mutex_output));
   priv->connection = NULL;
 }
 
@@ -180,10 +175,8 @@ g_websocket_class_init(GWebSocketClass * klass)
 static void
 _g_websocket_dispose(GObject* object)
 {
-  g_mutex_lock(&g_websocket_mutex);
   GWebSocket * self = G_WEBSOCKET(object);
   GWebSocketPrivate * priv = g_websocket_get_instance_private(self);
-  g_mutex_unlock(&g_websocket_mutex);
   if(g_websocket_is_connected(self))
     {
       GWebSocketDatagram * datagram = g_new0(GWebSocketDatagram,1);
@@ -196,11 +189,7 @@ _g_websocket_dispose(GObject* object)
       g_free(datagram);
       _g_websocket_stop(self);
     }
-  g_mutex_lock(&g_websocket_mutex);
-  g_mutex_clear(&priv->mutex_input);
-  g_mutex_clear(&priv->mutex_output);
   g_clear_object(&(priv->request));
-  g_mutex_unlock(&g_websocket_mutex);
   G_OBJECT_CLASS(g_websocket_parent_class)->dispose(object);
 }
 
@@ -542,86 +531,6 @@ _g_websocket_read_async(
   return TRUE;
 }
 
-/*static gboolean
-_g_websocket_read(
-      GInputStream * input,
-      GWebSocketDatagram ** datagram,
-      GCancellable * cancellable,
-      GError ** error)
-{
-  GWebSocketDatagram * result = g_new0(GWebSocketDatagram,1);
-
-  const guint64 max_frame_size = 15728640L; //-> 15MB
-  gboolean done = FALSE;
-  result->code = G_WEBSOCKET_CODEOP_CONTINUE;
-  result->buffer = NULL;
-  result->count = 0;
-
-  guint8 header[2] = {0,};
-
-  done = g_input_stream_read_all(input,&header,2,NULL,cancellable,error);
-  if(done)
-    {
-      result->fin = header[0] & 0b10000000;
-      result->code = header[0] & 0b00001111;
-
-      gboolean have_mask = header[1] & 0b10000000;
-      guint8 header_size = header[1] & 0b01111111;
-
-      if(header_size < 126)
-	{
-	  result->count = header_size;
-	}
-      else if(header_size == 126)
-	{
-	  done = g_input_stream_read_all(input,&(result->count),2,NULL,cancellable,error);
-	  result->count = GUINT16_FROM_BE((guint16)(result->count));
-	}
-      else if(header_size == 127)
-	{
-	  done = g_input_stream_read_all(input,&(result->count),8,NULL,cancellable,error);
-	  result->count = GUINT64_FROM_BE((guint64)(result->count));
-	}
-
-      if(done)
-	{
-	  if((result->count > 0) && (result->count <= max_frame_size))
-	    {
-	      guint8 mask[4] = {0,};
-	      if(have_mask)
-		{
-		  done = g_input_stream_read_all(input,mask,4,NULL,cancellable,error);
-		  result->mask = *((guint32 *)(mask));
-		}
-
-	      result->buffer = g_new0(guint8,(result->count) + 1);
-	      done = g_input_stream_read_all(input,result->buffer,result->count,NULL,cancellable,error);
-	      if(have_mask)
-		{
-		  for(guint i = 0;i<result->count;i++)
-		    (result->buffer)[i] ^= mask[i % 4];
-		}
-	      *datagram = result;
-	    }
-	  else if(result->code == G_WEBSOCKET_CODEOP_BINARY || result->code == G_WEBSOCKET_CODEOP_TEXT)
-	    {
-		//TODO: bad size datagram and free it
-	      done = FALSE;
-	      *datagram = NULL;
-	    }
-	  else
-	    {
-	      *datagram = result;
-	    }
-	}
-      else
-	{
-	  //TODO: free
-	}
-    }
-  return done;
-}*/
-
 static gboolean
 _g_websocket_write(
     GOutputStream * output,
@@ -668,17 +577,20 @@ _g_websocket_write(
     }
 
   gboolean done = FALSE;
-  done = g_output_stream_write_all (output, header, p, NULL, cancellable,error);
-  if(datagram->buffer)
+  done = g_output_stream_write_all(output, header, p,NULL, cancellable,error);
+  if(done)
     {
-      if(!(datagram->mask))
+      if(datagram->buffer)
 	{
-	  done = done && g_output_stream_write_all (output, datagram->buffer, datagram->count, NULL, cancellable, error);
-	}
-      else
-	{
-	  done = done && g_output_stream_write_all (output, masked_buf, datagram->count, NULL, cancellable, error);
-	  g_free(masked_buf);
+	  if(!(datagram->mask))
+	    {
+	      done = done && g_output_stream_write_all (output, datagram->buffer, datagram->count, NULL, cancellable, error);
+	    }
+	  else
+	    {
+	      done = done && g_output_stream_write_all (output, masked_buf, datagram->count, NULL, cancellable, error);
+	      g_free(masked_buf);
+	    }
 	}
     }
   return done;
@@ -790,14 +702,12 @@ g_websocket_is_connected(
     GWebSocket * socket
     )
 {
-  g_mutex_lock(&g_websocket_mutex);
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
   gboolean result = FALSE;
   if(priv->connection)
     {
       result = g_socket_connection_is_connected(priv->connection);
     }
-  g_mutex_unlock(&g_websocket_mutex);
   return result;
 }
 
@@ -830,9 +740,7 @@ HttpRequest *
 g_websocket_get_request(
     GWebSocket * socket)
 {
-  g_mutex_lock(&g_websocket_mutex);
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
-  g_mutex_unlock(&g_websocket_mutex);
   return priv->request;
 }
 
@@ -840,12 +748,15 @@ gboolean
 g_websocket_send(
     GWebSocket * socket,
     GWebSocketMessage * message,
-    GCancellable * cancellable,
     GError ** error
     )
 {
   GWebSocketClass * klass = G_WEBSOCKET_GET_CLASS(socket);
-  return klass->send(socket,message,cancellable,error);
+  GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
+  gboolean done = klass->send(socket,message,priv->recv_cancellable,error);
+  if(!done)
+    _g_websocket_stop(socket);
+  return done;
 }
 
 gboolean
@@ -853,12 +764,11 @@ g_websocket_send_text(
     GWebSocket * socket,
     const gchar * text,
     gssize length,
-    GCancellable * cancellable,
     GError ** error
     )
 {
   GWebSocketMessage * msg = g_websocket_message_new_text(text,length);
-  gboolean done = g_websocket_send(socket,msg,cancellable,error);
+  gboolean done = g_websocket_send(socket,msg,error);
   g_websocket_message_free(msg);
   return done;
 }
@@ -868,12 +778,11 @@ g_websocket_send_data(
     GWebSocket * socket,
     const guint8 * data,
     gssize length,
-    GCancellable * cancellable,
     GError ** error
     )
 {
   GWebSocketMessage * msg = g_websocket_message_new_data(data,length);
-  gboolean done = g_websocket_send(socket,msg,cancellable,error);
+  gboolean done = g_websocket_send(socket,msg,error);
   g_websocket_message_free(msg);
   return done;
 }

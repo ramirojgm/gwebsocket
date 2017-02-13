@@ -101,16 +101,15 @@ g_remote_capture_send(GWebSocketService * service)
   if(capture)
     {
       if(gdk_pixbuf_save_to_buffer(capture,&capture_data,&capture_data_size,"png",NULL,NULL))
-	{
-	  GRemoteCapture * data = g_new0(GRemoteCapture,1);
-	  data->data = capture_data;
-	  data->count = capture_data_size;
-	  g_websocket_service_broadcast(service,g_remote_capture_broadcast,data);
-	  g_free(data);
-	}
+		{
+		  GRemoteCapture * data = g_new0(GRemoteCapture,1);
+		  data->data = capture_data;
+		  data->count = capture_data_size;
+		  g_websocket_service_broadcast(service,g_remote_capture_broadcast,data);
+		  g_free(data);
+		}
     }
   g_free(capture_data);
   g_object_unref(capture);
   return G_SOURCE_CONTINUE;
 }
-

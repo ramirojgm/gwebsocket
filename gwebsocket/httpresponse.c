@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <math.h>
 #include "httpresponse.h"
 
 static const int _http_response_codes[] = {200,400,404,500,101,403,0};
@@ -62,7 +63,9 @@ _http_response_read_from_stream_real(HttpPackage * package,
 				break;
 			}
 		}
-		priv->version = g_strtod(version + 5,NULL);
+		gint version_first = 1,version_last = 0;
+		sscanf(version + 5,"%d.%d",&version_first,&version_last);
+		priv->version =	((gdouble)version_first) + (((gdouble)version_last) / (log(version_last) * 10));
 		done = HTTP_PACKAGE_CLASS(http_response_parent_class)->read_from_stream(package,data_stream,&count,cancellable,error);
 		total_count += count;
 		if(length)
@@ -90,7 +93,9 @@ _http_response_write_to_stream_real(HttpPackage * package,
 	count = 0,total_count = 0;
 	gboolean
 	done = TRUE;
-	if(g_output_stream_printf(stream,&count,cancellable,error,"HTTP/%0.1f %d %s\r\n",priv->version,_http_response_codes[priv->code],_http_response_strings[priv->code]))
+	gdouble version_first = 0;
+	gdouble version_last = modf(priv->version,&version_first);
+	if(g_output_stream_printf(stream,&count,cancellable,error,"HTTP/%g.%g %d %s\r\n",version_first,version_last * 10,_http_response_codes[priv->code],_http_response_strings[priv->code]))
 	{
 		done = HTTP_PACKAGE_CLASS(http_response_parent_class)->write_to_stream(package,stream,&total_count,cancellable,error);
 		if(length)

@@ -18,6 +18,7 @@
 #include "gwebsocketservice.h"
 
 typedef struct _GWebSocketServicePrivate GWebSocketServicePrivate;
+typedef struct _GWebSocketServiceIdleData GWebSocketServiceIdleData;
 
 static GMutex g_websocket_service_mutex = G_STATIC_MUTEX_INIT;
 
@@ -25,6 +26,12 @@ struct _GWebSocketServicePrivate
 {
   GMutex  mutex_internal;
   GList * clients;
+};
+
+struct _GWebSocketServiceIdleData
+{
+  GWebSocketService * service;
+  GWebSocket * socket;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE(GWebSocketService,g_websocket_service,G_TYPE_THREADED_SOCKET_SERVICE)
@@ -144,6 +151,8 @@ static gboolean	_g_websocket_service_run (
   HttpRequest * request = http_request_new(HTTP_REQUEST_METHOD_GET,"",1.1);
   GDataInputStream * data_stream = http_data_input_stream(input,NULL,NULL,NULL);
 
+  g_socket_set_keepalive(g_socket_connection_get_socket(connection),TRUE);
+
   if(data_stream)
     {
       http_package_read_from_stream(HTTP_PACKAGE(request),data_stream,NULL,NULL,NULL);
@@ -183,6 +192,27 @@ static gboolean	_g_websocket_service_run (
   return FALSE;
 }
 
+
+gboolean
+_g_websocket_service_client_closed_idle(gpointer data)
+{
+  GWebSocketServiceIdleData * idle_data = (GWebSocketServiceIdleData*)data;
+  g_mutex_lock(&g_websocket_service_mutex);
+  GWebSocketServicePrivate * priv = g_websocket_service_get_instance_private(G_WEBSOCKET_SERVICE(idle_data->service));
+  g_mutex_unlock(&g_websocket_service_mutex);
+  gboolean result = G_SOURCE_CONTINUE;
+  if(g_mutex_trylock(&(priv->mutex_internal)))
+    {
+      g_signal_emit (idle_data->service, g_websocket_service_signals[SIGNAL_CLOSED],0,idle_data->socket);
+      priv->clients = g_list_remove(priv->clients,idle_data->socket);
+      g_object_unref(idle_data->socket);
+      g_mutex_unlock(&(priv->mutex_internal));
+      result = G_SOURCE_REMOVE;
+    }
+  return result;
+}
+
+
 void
 _g_websocket_service_client_message(
 		  GWebSocket * socket,
@@ -192,26 +222,16 @@ _g_websocket_service_client_message(
   g_signal_emit (service, g_websocket_service_signals[SIGNAL_MESSAGE],0,socket,message);
 }
 
-gboolean
-_g_websocket_service_socket_unref(gpointer data)
-{
-  g_object_unref(data);
-  return G_SOURCE_REMOVE;
-}
 
 void
 _g_websocket_service_client_closed(
 		  GWebSocket * socket,
 		  GWebSocketService * service)
 {
-  g_mutex_lock(&g_websocket_service_mutex);
-  GWebSocketServicePrivate * priv = g_websocket_service_get_instance_private(G_WEBSOCKET_SERVICE(service));
-  g_mutex_unlock(&g_websocket_service_mutex);
-  g_signal_emit (service, g_websocket_service_signals[SIGNAL_CLOSED],0,socket);
-  g_mutex_lock(&(priv->mutex_internal));
-  priv->clients = g_list_remove(priv->clients,socket);
-  g_mutex_unlock(&(priv->mutex_internal));
-  g_idle_add(_g_websocket_service_socket_unref,socket);
+  GWebSocketServiceIdleData * data = g_new0(GWebSocketServiceIdleData,1);
+  data->service = service;
+  data->socket = socket;
+  g_idle_add(_g_websocket_service_client_closed_idle,data);
 }
 
 GWebSocketService *

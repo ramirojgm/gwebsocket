@@ -71,7 +71,6 @@ HttpRequest *	g_websocket_get_request(
 gboolean	g_websocket_send(
 		    GWebSocket * socket,
 		    GWebSocketMessage * message,
-		    GCancellable * cancellable,
 		    GError ** error
 		    );
 
@@ -79,7 +78,6 @@ gboolean	g_websocket_send_text(
 		    GWebSocket * socket,
 		    const gchar * text,
 		    gssize length,
-		    GCancellable * cancellable,
 		    GError ** error
 		    );
 
@@ -87,7 +85,6 @@ gboolean	g_websocket_send_data(
 		    GWebSocket * socket,
 		    const guint8 * data,
 		    gssize length,
-		    GCancellable * cancellable,
 		    GError ** error
 		    );
 
