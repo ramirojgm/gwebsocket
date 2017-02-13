@@ -16,7 +16,7 @@
  */
 
 #include <glib.h>
-#include <gdk/gdk.h>
+#include <gtk/gtk.h>
 #include <gwebsocket/gwebsocketservice.h>
 
 typedef struct _GRemoteCapture GRemoteCapture;
@@ -36,7 +36,7 @@ main(gint argc,gchar * argv[])
   gtk_init(&argc,&argv);
   GWebSocketService * service = g_websocket_service_new(30);
   g_socket_listener_add_inet_port(G_SOCKET_LISTENER(service),8080,G_OBJECT(service),NULL);
-  g_signal_connect(service,"request",G_CALLBACK(g_remote_console_request),NULL);
+  g_signal_connect(service,"request",G_CALLBACK(g_remote_capture_request),NULL);
   g_socket_service_start(G_SOCKET_SERVICE(service));
   g_timeout_add(200,g_remote_capture_send,service);
   gtk_main();
