@@ -74,8 +74,6 @@ struct _GWebSocketReadData
 
 G_DEFINE_TYPE_WITH_PRIVATE(GWebSocket,g_websocket,G_TYPE_OBJECT)
 
-static GMutex	g_websocket_mutex = G_STATIC_MUTEX_INIT;
-
 static void	_g_websocket_dispose(GObject* object);
 static void	_g_websocket_start(GWebSocket * self);
 static void	_g_websocket_stop(GWebSocket * self);
