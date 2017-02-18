@@ -69,7 +69,7 @@ _http_request_read_from_stream_real(HttpPackage * package,
 		priv->query = g_strdup(query);
 		gint version_first = 1,version_last = 0;
 		sscanf(version + 5,"%d.%d",&version_first,&version_last);
-		priv->version =	((gdouble)version_first) + (((gdouble)version_last) / (log(version_last) * 10));
+		priv->version =	((gdouble)version_first) + (((gdouble)version_last) / 10);
 		done = HTTP_PACKAGE_CLASS(http_request_parent_class)->read_from_stream(package,data_stream,&count,cancellable,error);
 		total_count += count;
 		if(length)

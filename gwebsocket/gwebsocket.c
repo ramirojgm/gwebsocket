@@ -429,72 +429,80 @@ _g_websocket_read_header(GObject *source_object,
                         gpointer user_data)
 {
   const guint64 max_frame_size = 15728640L; //-> 15MB
+  gsize read_size = 0;
   gboolean done = FALSE;
   GWebSocketReadData *  data = (GWebSocketReadData *)(user_data);
-  if(g_input_stream_read_all_finish(data->stream,res,NULL,NULL))
+  if(g_input_stream_read_all_finish(data->stream,res,&read_size,NULL))
     {
-      data->datagram = g_new0(GWebSocketDatagram,1);
-      data->datagram->fin = data->header_buffer[0] & 0b10000000;
-      data->datagram->code = data->header_buffer[0] & 0b00001111;
+      if(read_size == 2)
+	{
+	  data->datagram = g_new0(GWebSocketDatagram,1);
+	  data->datagram->fin = data->header_buffer[0] & 0b10000000;
+	  data->datagram->code = data->header_buffer[0] & 0b00001111;
 
-      gboolean have_mask = data->header_buffer[1] & 0b10000000;
-      guint8 header_size = data->header_buffer[1] & 0b01111111;
+	  gboolean have_mask = data->header_buffer[1] & 0b10000000;
+	  guint8 header_size = data->header_buffer[1] & 0b01111111;
 
-      if(header_size < 126)
-	{
-	  done = TRUE;
-	  data->datagram->count = header_size;
-	}
-      else if(header_size == 126)
-	{
-	  done = g_input_stream_read_all(data->stream,&(data->datagram->count),2,NULL,data->cancellable,NULL);
-	  data->datagram->count = GUINT16_FROM_BE((guint16)(data->datagram->count));
-	}
-      else if(header_size == 127)
-	{
-	  done = g_input_stream_read_all(data->stream,&(data->datagram->count),8,NULL,data->cancellable,NULL);
-	  data->datagram->count = GUINT64_FROM_BE((guint64)(data->datagram->count));
-	}
-      if(done)
-     	{
-     	  if((data->datagram->count > 0) && (data->datagram->count <= max_frame_size))
-     	    {
-     	      guint8 mask[4] = {0,};
-     	      data->have_mask = have_mask;
-     	      if(have_mask)
-     		{
-     		  done = g_input_stream_read_all(data->stream,mask,4,NULL,data->cancellable,NULL);
-     		  data->datagram->mask = *((guint32 *)(mask));
-     		}
-     	      data->datagram->buffer = g_new0(guint8,(data->datagram->count) + 1);
-     	      g_input_stream_read_all_async(data->stream,
-					    data->datagram->buffer,
-					    data->datagram->count,
-					    G_THREAD_PRIORITY_NORMAL,
-					    data->cancellable,
-					    _g_websocket_read_content,
-					    data);
-     	    }
-     	  else if(data->datagram->count == 0)
-     	    {
-     	      GWebSocketIdleData * idle_data = g_new0(GWebSocketIdleData,1);
-	      idle_data->datagram = data->datagram;
-	      idle_data->socket = data->socket;
-	      g_idle_add(_g_websocket_recv_idle,idle_data);
+	  if(header_size < 126)
+	    {
+	      done = TRUE;
+	      data->datagram->count = header_size;
+	    }
+	  else if(header_size == 126)
+	    {
+	      done = g_input_stream_read_all(data->stream,&(data->datagram->count),2,NULL,data->cancellable,NULL);
+	      data->datagram->count = GUINT16_FROM_BE((guint16)(data->datagram->count));
+	    }
+	  else if(header_size == 127)
+	    {
+	      done = g_input_stream_read_all(data->stream,&(data->datagram->count),8,NULL,data->cancellable,NULL);
+	      data->datagram->count = GUINT64_FROM_BE((guint64)(data->datagram->count));
+	    }
+	  if(done)
+	    {
+	      if((data->datagram->count > 0) && (data->datagram->count <= max_frame_size))
+		{
+		  guint8 mask[4] = {0,};
+		  data->have_mask = have_mask;
+		  if(have_mask)
+		    {
+		      done = g_input_stream_read_all(data->stream,mask,4,NULL,data->cancellable,NULL);
+		      data->datagram->mask = *((guint32 *)(mask));
+		    }
+		  data->datagram->buffer = g_new0(guint8,(data->datagram->count) + 1);
+		  g_input_stream_read_all_async(data->stream,
+						data->datagram->buffer,
+						data->datagram->count,
+						G_THREAD_PRIORITY_NORMAL,
+						data->cancellable,
+						_g_websocket_read_content,
+						data);
+		}
+	      else if(data->datagram->count == 0)
+		{
+		  GWebSocketIdleData * idle_data = g_new0(GWebSocketIdleData,1);
+		  idle_data->datagram = data->datagram;
+		  idle_data->socket = data->socket;
+		  g_idle_add(_g_websocket_recv_idle,idle_data);
+		  g_free(data);
+		}
+	      else
+		{
+		  _g_websocket_stop(data->socket);
+		  g_free(data->datagram);
+		  g_free(data);
+		}
+	    }
+	  else
+	    {
+	      _g_websocket_stop(data->socket);
+	      g_free(data->datagram);
 	      g_free(data);
-     	    }
-     	  else
-     	    {
-     	      _g_websocket_stop(data->socket);
-     	      g_free(data->datagram);
-     	      g_free(data);
-     	    }
-     	}
+	    }
+	}
       else
 	{
 	  _g_websocket_stop(data->socket);
-	  g_free(data->datagram);
-	  g_free(data);
 	}
     }
   else
@@ -582,15 +590,17 @@ _g_websocket_write(
 	{
 	  if(!(datagram->mask))
 	    {
-	      done = done && g_output_stream_write_all (output, datagram->buffer, datagram->count, NULL, cancellable, error);
+	      done = g_output_stream_write_all (output, datagram->buffer, datagram->count, NULL, cancellable, error);
 	    }
 	  else
 	    {
-	      done = done && g_output_stream_write_all (output, masked_buf, datagram->count, NULL, cancellable, error);
+	      done = g_output_stream_write_all (output, masked_buf, datagram->count, NULL, cancellable, error);
 	      g_free(masked_buf);
 	    }
 	}
+      done = g_output_stream_flush(output,cancellable,error);
     }
+
   return done;
 }
 
@@ -606,8 +616,6 @@ _g_websocket_complete(
   GWebSocketPrivate * priv = g_websocket_get_instance_private(socket);
   priv->connection = G_SOCKET_CONNECTION(g_object_ref(connection));
   GOutputStream * output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
-
-  g_socket_set_keepalive(g_socket_connection_get_socket(priv->connection),TRUE);
 
   HttpResponse* response = http_response_new(HTTP_RESPONSE_SWITCHING_PROTOCOLS,1.1);
 
@@ -634,8 +642,6 @@ _g_websocket_complete_client(GWebSocket * socket,const gchar * hostname,const gc
   GInputStream * input = g_io_stream_get_input_stream(G_IO_STREAM(priv->connection));
   GOutputStream * output = g_io_stream_get_output_stream(G_IO_STREAM(priv->connection));
   priv->use_mask = TRUE;
-
-  g_socket_set_keepalive(g_socket_connection_get_socket(priv->connection),TRUE);
 
   HttpRequest * request = http_request_new(HTTP_REQUEST_METHOD_GET,"",1.1);
   HttpResponse* response = http_response_new(HTTP_RESPONSE_SWITCHING_PROTOCOLS,1.1);
