@@ -149,6 +149,7 @@ static gboolean	_g_websocket_service_run (
   g_mutex_unlock(&g_websocket_service_mutex);
   GInputStream * input = g_io_stream_get_input_stream(G_IO_STREAM(connection));
   HttpRequest * request = http_request_new(HTTP_REQUEST_METHOD_GET,"",1.1);
+  g_socket_set_timeout(g_socket_connection_get_socket(connection),10);
   GDataInputStream * data_stream = http_data_input_stream(input,NULL,NULL,NULL);
 
   g_socket_set_keepalive(g_socket_connection_get_socket(connection),TRUE);
@@ -163,6 +164,7 @@ static gboolean	_g_websocket_service_run (
 			    && (key = http_package_get_string(HTTP_PACKAGE(request),"Sec-WebSocket-Key",NULL));
       if(is_websocket)
 	{
+	  g_socket_set_timeout(g_socket_connection_get_socket(connection),0);
 	  GWebSocket * socket = g_websocket_new();
 	   if(_g_websocket_complete(socket,connection,request,key,origin))
 	     {
