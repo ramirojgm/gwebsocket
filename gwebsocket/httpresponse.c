@@ -187,7 +187,7 @@ _http_response_read_from_stream_real(HttpPackage * package,
       sscanf(string_response,"%s %d",version,&code);
       priv->code = code;
       sscanf(version + 5,"%d.%d",&version_first,&version_last);
-      priv->version =	((gdouble)version_first) + (((gdouble)version_last) / (log(version_last) * 10));
+      priv->version =	((gdouble)version_first) + (((gdouble)version_last)  / 10);
       done = HTTP_PACKAGE_CLASS(http_response_parent_class)->read_from_stream(package,data_stream,&count,cancellable,error);
       total_count += count;
       if(length)

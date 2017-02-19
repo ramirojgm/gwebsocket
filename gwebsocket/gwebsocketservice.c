@@ -26,6 +26,7 @@ struct _GWebSocketServicePrivate
 {
   GMutex  mutex_internal;
   GList * clients;
+  glong   ping_task_id;
 };
 
 struct _GWebSocketServiceIdleData
@@ -37,6 +38,8 @@ struct _GWebSocketServiceIdleData
 G_DEFINE_TYPE_WITH_PRIVATE(GWebSocketService,g_websocket_service,G_TYPE_THREADED_SOCKET_SERVICE)
 
 void		_g_websocket_service_dispose(GObject * object);
+
+gboolean	_g_websocket_ping(GWebSocket * socket);
 
 gboolean	_g_websocket_complete(
 		    GWebSocket * socket,
@@ -74,11 +77,26 @@ enum
 static gint		g_websocket_service_signals[N_SIGNALS];
 
 static void
+g_websocket_service_ping_task_broadcast(GWebSocketService * service,GWebSocket * socket,gpointer data)
+{
+  _g_websocket_ping(socket);
+}
+
+static gboolean
+g_websocket_service_ping_task(gpointer service)
+{
+  if(g_socket_service_is_active(G_SOCKET_SERVICE(service)))
+      g_websocket_service_broadcast(G_WEBSOCKET_SERVICE(service),g_websocket_service_ping_task_broadcast,NULL);
+  return G_SOURCE_CONTINUE;
+}
+
+static void
 g_websocket_service_init(GWebSocketService * self)
 {
   GWebSocketServicePrivate * priv = g_websocket_service_get_instance_private(self);
   g_signal_connect(self,"run",G_CALLBACK(_g_websocket_service_run),NULL);
   g_mutex_init(&(priv->mutex_internal));
+  priv->ping_task_id = g_timeout_add(5000,g_websocket_service_ping_task,self);
 }
 
 static void
