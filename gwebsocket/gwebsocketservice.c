@@ -197,9 +197,7 @@ static gboolean	_g_websocket_service_run (
 	}
       else
       {
-	g_mutex_lock(&(priv->mutex_internal));
 	g_signal_emit(service,g_websocket_service_signals[SIGNAL_REQUEST],0,request,connection);
-	g_mutex_unlock(&(priv->mutex_internal));
 	if(g_socket_connection_is_connected(connection))
 	  g_io_stream_close(G_IO_STREAM(connection),NULL,NULL);
       }
