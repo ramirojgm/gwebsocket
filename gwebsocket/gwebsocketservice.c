@@ -123,7 +123,7 @@ g_websocket_service_class_init(GWebSocketServiceClass * klass)
   g_websocket_service_signals[SIGNAL_MESSAGE] =
      g_signal_newv ("message",
       G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE,
       NULL /* closure */,
       NULL /* accumulator */,
       NULL /* accumulator data */,
@@ -135,7 +135,7 @@ g_websocket_service_class_init(GWebSocketServiceClass * klass)
   g_websocket_service_signals[SIGNAL_CLOSED] =
      g_signal_newv ("closed",
       G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE,
       NULL /* closure */,
       NULL /* accumulator */,
       NULL /* accumulator data */,
@@ -147,7 +147,7 @@ g_websocket_service_class_init(GWebSocketServiceClass * klass)
   g_websocket_service_signals[SIGNAL_REQUEST] =
      g_signal_newv ("request",
       G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE | G_SIGNAL_NO_HOOKS,
+      G_SIGNAL_RUN_FIRST | G_SIGNAL_NO_RECURSE,
       NULL /* closure */,
       NULL /* accumulator */,
       NULL /* accumulator data */,
