@@ -9,17 +9,68 @@
 		</style>
 	</head>
 	<body>
-		<img id="screenshot" style="max-width:100%;max-height:100%"/>
+		<img id="screen" style="width:100%;height:100%;background-color:#b2b2b2;"/>
 		<script type="text/javascript">
-			var screenshot = document.getElementById("screenshot");
+			var screen = document.getElementById("screen");
+
 			var urlCreator = window.URL || window.webkitURL;
 			var ws = new WebSocket("ws://" + window.location.host + "/");
-			
+			var lastMouseMove = 0;
+			var originalSize = {width: 0,height: 0};
+
+			var transformX = function(x)
+			{
+				return ((originalSize.width * x) / screen.width);
+			}
+
+			var transformY = function(y)
+			{
+				return ((originalSize.height * y) / screen.height);
+			}
+
+			var eventHandler = function(event)
+			{
+				var command = "";
+				if(event.type == "mousemove")
+				{
+					if((event.timeStamp - lastMouseMove) > 100)
+					{
+						lastMouseMove = event.timeStamp;
+						command = "mm " + transformX(event.clientX).toString() + " " + transformY(event.clientY).toString() + " " + event.timeStamp.toString();
+					}
+				}
+				else if(event.type == "mousedown")
+					command = "md " + transformX(event.clientX).toString() + " " + transformY(event.clientY).toString() + " " + event.button.toString() + " " + event.timeStamp.toString();
+				else if(event.type == "mouseup")
+					command = "mu " + transformX(event.clientX).toString() + " " + transformY(event.clientY).toString() + " " + event.button.toString() + " " + event.timeStamp.toString();
+				else if(event.type == "keydown")
+					command = "kd " + event.keyCode.toString() + " " + event.timeStamp.toString();	
+				else if(event.type == "keyup")
+					command = "ku " + event.keyCode.toString() + " " + event.timeStamp.toString();	
+				if(command != "")
+					ws.send(command);
+				window.e = event;
+				event.preventDefault();
+			}			
+
 			ws.onmessage = function(data)
 			{
-			   var imageUrl = urlCreator.createObjectURL(data.data);
-			   screenshot.src = imageUrl;
-			}	
+				screen.src = urlCreator.createObjectURL(data.data);
+				screen.onload = function()
+				{
+					originalSize = {
+						width: screen.naturalWidth,
+						height: screen.naturalHeight,
+					};
+				}
+			}
+		
+			window.onmousedown = eventHandler;
+			window.onmouseup = eventHandler;
+			window.onmousemove = eventHandler;
+			window.onkeydown = eventHandler;
+			window.onkeyup = eventHandler;
+			
 		</script>
 	</body>
 </html>
